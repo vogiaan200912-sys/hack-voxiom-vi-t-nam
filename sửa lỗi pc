@@ -1,0 +1,8 @@
+GodMode.{ED7BA470-8E54-465E-825C-99712043E01C}
+NETPLWIZ QUÉT VIRUS
+CLEANMGR DỌN FILE RÁC
+MRT TÌM LỖI
+MDSCHED.EXE SỬA RAM
+👇 LỆNH GỌI TOOL TỐI ƯU (WinUtil): (Mở PowerShell bằng quyền Admin rồi dán vào nhé)
+
+iwr -useb https://christitus.com/win | iex
