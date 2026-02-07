@@ -1,0 +1,270 @@
+// ==UserScript==
+// @name        Voxiom.io Hybrid Zoom (Z-Toggle, F-Hold) v2.0
+// @namespace   Violentmonkey Scripts
+// @match       https://voxiom.io/*
+// @grant       none
+// @version     6.0
+// @author      Bạn & Võ Gia An
+// @description Z: Bật/Tắt | F: Đè/Thả | Menu trắng đẹp | Tùy chọn cuộn chuột.
+// ==/UserScript==
+
+(function() {
+    'use strict';
+
+    // --- 1. Cấu hình & Trạng thái ---
+    const espConfig = {
+        zoomLevel: 20,       // Độ phóng đại (FOV)
+        zActive: false,      // Trạng thái của phím Z (Toggle)
+        fActive: false,      // Trạng thái của phím F (Hold)
+        useFKey: true,       // Có cho phép dùng phím F không
+        useScroll: true,     // [MỚI] Có cho phép cuộn chuột để chỉnh Zoom không
+        zoomKey: 'z',
+    };
+
+    // Hàm kiểm tra xem hiện tại có đang Zoom hay không
+    function isZooming() {
+        return espConfig.zActive || espConfig.fActive;
+    }
+
+    // --- 2. Tạo Giao diện (Custom UI White) ---
+    const uiContainer = document.createElement('div');
+    uiContainer.id = 'vx-zoom-menu';
+    uiContainer.innerHTML = `
+        <div class="vx-header">
+            <h3>🔭 PRO ZOOM</h3>
+            <span class="vx-status" id="vx-status-badge">OFF</span>
+        </div>
+
+        <div class="vx-row">
+            <label>Độ Zoom (FOV): <b id="vx-val-display">20</b></label>
+            <input type="range" id="vx-slider" min="1" max="175" value="20">
+        </div>
+
+        <div class="vx-row row-check">
+            <label for="vx-check-f">Bật chức năng đè phím F</label>
+            <input type="checkbox" id="vx-check-f" checked>
+        </div>
+
+        <div class="vx-row row-check">
+            <label for="vx-check-scroll">Cuộn chuột chỉnh Zoom</label>
+            <input type="checkbox" id="vx-check-scroll" checked>
+        </div>
+
+        <div class="vx-footer">
+            [ Z ] : Bấm 1 lần để Bật/Tắt<br>
+            [ F ] : Đè để Zoom, Thả để Tắt<br>
+            [ . ] : Ẩn Menu<br>
+            VÕ GIA AN V2.0
+        </div>
+    `;
+    document.body.appendChild(uiContainer);
+
+    // --- 3. CSS (Giao diện đẹp) ---
+    const style = document.createElement('style');
+    style.innerHTML = `
+        /* Khung Menu */
+        #vx-zoom-menu {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            width: 260px; /* Rộng hơn xíu cho đẹp */
+            background: #ffffff;
+            border-radius: 10px;
+            box-shadow: 0 5px 20px rgba(0,0,0,0.2);
+            font-family: 'Segoe UI', sans-serif;
+            z-index: 99999;
+            padding: 15px;
+            border: 1px solid #ddd;
+            display: block;
+        }
+
+        /* Header */
+        .vx-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+            border-bottom: 1px solid #eee;
+            padding-bottom: 8px;
+        }
+        .vx-header h3 {
+            margin: 0;
+            font-size: 16px;
+            color: #333;
+            font-weight: 800;
+            letter-spacing: 0.5px;
+        }
+
+        /* Badge ON/OFF */
+        .vx-status {
+            font-size: 11px;
+            font-weight: bold;
+            padding: 4px 10px;
+            border-radius: 12px;
+            background: #eee;
+            color: #777;
+            min-width: 35px;
+            text-align: center;
+            transition: all 0.2s;
+        }
+        .vx-status.active {
+            background: #28a745;
+            color: white;
+            box-shadow: 0 2px 8px rgba(40, 167, 69, 0.4);
+        }
+
+        /* Inputs */
+        .vx-row { margin-bottom: 12px; }
+        .vx-row label {
+            display: block;
+            font-size: 13px;
+            font-weight: 600;
+            margin-bottom: 5px;
+            color: #555;
+        }
+        .vx-row b { color: #007bff; }
+
+        /* Slider Custom */
+        input[type=range] {
+            width: 100%;
+            height: 6px;
+            background: #e0e0e0;
+            border-radius: 5px;
+            -webkit-appearance: none;
+            outline: none;
+        }
+        input[type=range]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 18px;
+            height: 18px;
+            background: #007bff;
+            border-radius: 50%;
+            cursor: pointer;
+            border: 2px solid #fff;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+            transition: 0.1s;
+        }
+        input[type=range]::-webkit-slider-thumb:hover { transform: scale(1.1); }
+
+        /* Footer */
+        .vx-footer {
+            font-size: 11px;
+            color: #999;
+            text-align: center;
+            margin-top: 15px;
+            border-top: 1px solid #eee;
+            padding-top: 8px;
+            line-height: 1.5;
+        }
+        .row-check { display: flex; justify-content: space-between; align-items: center; }
+        .row-check input { width: 16px; height: 16px; cursor: pointer; accent-color: #007bff; }
+    `;
+    document.head.appendChild(style);
+
+    // --- 4. Logic UI ---
+    const sliderEl = document.getElementById('vx-slider');
+    const displayValEl = document.getElementById('vx-val-display');
+    const checkFEl = document.getElementById('vx-check-f');
+    const checkScrollEl = document.getElementById('vx-check-scroll'); // Element mới
+    const statusBadge = document.getElementById('vx-status-badge');
+
+    // Cập nhật giá trị khi kéo slider
+    sliderEl.addEventListener('input', (e) => {
+        espConfig.zoomLevel = parseInt(e.target.value);
+        displayValEl.innerText = espConfig.zoomLevel;
+    });
+
+    // Cập nhật checkbox dùng phím F
+    checkFEl.addEventListener('change', (e) => {
+        espConfig.useFKey = e.target.checked;
+    });
+
+    // [MỚI] Cập nhật checkbox dùng Scroll
+    checkScrollEl.addEventListener('change', (e) => {
+        espConfig.useScroll = e.target.checked;
+    });
+
+    // Hàm cập nhật Badge ON/OFF
+    function updateBadge() {
+        if (isZooming()) {
+            statusBadge.innerText = "ON";
+            statusBadge.classList.add('active');
+        } else {
+            statusBadge.innerText = "OFF";
+            statusBadge.classList.remove('active');
+        }
+    }
+
+    // --- 5. Logic Game ---
+
+    // Xử lý sự kiện NHẤN PHÍM (KeyDown)
+    window.addEventListener('keydown', (e) => {
+        // Phím ẩn/hiện menu [.]
+        if (e.key === '.') {
+            uiContainer.style.display = (uiContainer.style.display === 'none') ? 'block' : 'none';
+            return;
+        }
+
+        // Không chạy khi đang chat
+        if (document.activeElement.tagName === 'INPUT') return;
+
+        const keyL = e.key.toLowerCase();
+
+        // 1. Phím Z (Toggle)
+        if (keyL === espConfig.zoomKey) {
+            espConfig.zActive = !espConfig.zActive;
+            updateBadge();
+        }
+
+        // 2. Phím F (Hold)
+        if (keyL === 'f' && espConfig.useFKey) {
+            espConfig.fActive = true;
+            updateBadge();
+        }
+    });
+
+    // Xử lý sự kiện THẢ PHÍM (KeyUp)
+    window.addEventListener('keyup', (e) => {
+        const keyL = e.key.toLowerCase();
+        if (keyL === 'f' && espConfig.useFKey) {
+            espConfig.fActive = false;
+            updateBadge();
+        }
+    });
+
+    // [CẬP NHẬT] Xử lý cuộn chuột
+    window.addEventListener('wheel', (e) => {
+        // Chỉ chạy nếu đang Zoom VÀ tính năng Scroll được BẬT
+        if (isZooming() && espConfig.useScroll) {
+            e.preventDefault(); // Chặn đổi súng
+            e.stopPropagation(); // Ngăn chặn sự kiện lan truyền
+
+            if (e.deltaY < 0) {
+                espConfig.zoomLevel = Math.max(1, espConfig.zoomLevel - 3);
+            } else {
+                espConfig.zoomLevel = Math.min(175, espConfig.zoomLevel + 3);
+            }
+            // Đồng bộ lại Slider trên Menu
+            sliderEl.value = espConfig.zoomLevel;
+            displayValEl.innerText = espConfig.zoomLevel;
+        }
+        // Nếu bỏ tích "Cuộn chuột chỉnh Zoom", game sẽ tự xử lý (đổi súng)
+    }, { passive: false });
+
+    // Can thiệp Camera
+    Object.defineProperty(Object.prototype, 'fov', {
+        get: function() {
+            if (this.isPerspectiveCamera && isZooming()) {
+                return espConfig.zoomLevel;
+            }
+            return this._fov;
+        },
+        set: function(v) {
+            this._fov = v;
+        },
+        configurable: true
+    });
+
+    console.log("Voxiom Hybrid Zoom v2.0 Loaded.");
+
+})();
