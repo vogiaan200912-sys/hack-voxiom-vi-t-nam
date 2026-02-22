@@ -1,0 +1,519 @@
+// ==UserScript==
+// @name         MICHAEL | GIA AN Client v1.5
+// @namespace    https://greasyfork.org/en/users/1299968-grad
+// @version      v1.5-FOV-Toggle
+// @description  Bloxd.io Client - Added Toggle for Max Angle (FOV)
+// @author       MICHAEL | GIA AN
+// @license      MIT
+// @match        https://bloxd.io/*
+// @match        http://bloxd.io/*
+// @match        https://*.bloxd.io/*
+// @match        http://*.bloxd.io/*
+// @icon         https://www.google.com/s2/favicons?sz=64&domain=bloxd.io
+// @grant        none
+// @run-at       document-end
+// ==/UserScript==
+
+(function() {
+  'use strict';
+
+  alert("MICHAEL | GIA AN v1.5\n- Đã thêm nút BẬT/TẮT cho Góc Aim (FOV)\n- Check vào ô vuông cạnh 'Góc Aim' để dùng giới hạn góc.");
+
+  // Config: Thêm fov_on (Trạng thái bật tắt FOV)
+  const C = { aimbot: { on: 0, i: 20, s: 0.4, m: 100, fov: 0.4, fov_on: 1, k: null }, esp: { on: 0, k: null } };
+  const S = "michael_gia_an_cfg_v5", M = "michael_gia_an_pos";
+  let cfg = JSON.parse(JSON.stringify(C)), menu = null, pos = { x: null, y: null }, lobby = null, btn = null, inLobby = 0, rshift = 0;
+  let fovTimeout = null;
+
+  const v = (o) => Object.values(o || {});
+  const a = (f, d = null) => { try { return f(); } catch { return d; } };
+
+  // --- STYLES ---
+  const stylesCSS = `
+    <style id="michael-styles">
+      /* Notification */
+      .michael-notif-container { position: fixed; bottom: 20px; left: 20px; z-index: 10000001; pointer-events: none; }
+      .michael-notif {
+        background: rgba(255, 255, 255, 0.95); border-left: 6px solid #333; padding: 12px 24px;
+        border-radius: 4px; box-shadow: 0 4px 15px rgba(0,0,0,0.15); font-family: 'Segoe UI', sans-serif;
+        min-width: 200px; transform: translateX(-120%); transition: transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        backdrop-filter: blur(5px); display: flex; flex-direction: column;
+      }
+      .michael-notif.show { transform: translateX(0); }
+      .mn-title { font-weight: 800; font-size: 14px; color: #333; margin-bottom: 2px; }
+      .mn-status { font-weight: 600; font-size: 12px; text-transform: uppercase; }
+
+      /* FOV Grid */
+      #michael-fov-grid {
+        position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+        border: 2px solid rgba(59, 130, 246, 0.6);
+        background-image:
+          linear-gradient(rgba(59, 130, 246, 0.1) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(59, 130, 246, 0.1) 1px, transparent 1px);
+        background-size: 20px 20px;
+        border-radius: 50%;
+        pointer-events: none;
+        z-index: 9999;
+        opacity: 0;
+        transition: opacity 0.3s, width 0.2s, height 0.2s;
+        box-shadow: 0 0 50px rgba(59, 130, 246, 0.2) inset;
+      }
+      #michael-fov-grid::after {
+        content: ''; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+        width: 4px; height: 4px; background: rgba(59, 130, 246, 0.8); border-radius: 50%;
+      }
+
+      /* Checkbox Style */
+      .michael-checkbox {
+        width: 16px; height: 16px; cursor: pointer; accent-color: #3b82f6;
+      }
+    </style>
+  `;
+
+  const ntf = (name, state) => {
+    if (!document.getElementById("michael-styles")) document.head.insertAdjacentHTML("beforeend", stylesCSS);
+    let con = document.getElementById("michael-notif-area");
+    if (!con) {
+        con = document.createElement("div"); con.id = "michael-notif-area"; con.className = "michael-notif-container";
+        document.body.appendChild(con);
+    }
+    con.innerHTML = '';
+    const el = document.createElement("div");
+    el.className = "michael-notif";
+    el.style.borderLeftColor = state ? "#10b981" : "#ef4444";
+    el.innerHTML = `<span class="mn-title">${name}</span><span class="mn-status" style="color:${state ? "#059669" : "#dc2626"}">${state ? "ĐÃ BẬT" : "ĐÃ TẮT"}</span>`;
+    con.appendChild(el);
+    requestAnimationFrame(() => el.classList.add("show"));
+    setTimeout(() => { if (el && el.parentNode) { el.classList.remove("show"); setTimeout(() => { if (el && el.parentNode) el.remove(); }, 300); } }, 2000);
+  };
+
+  const showFov = (angle) => {
+    // Chỉ hiện lưới nếu tính năng FOV đang BẬT
+    if (!cfg.aimbot.fov_on) return;
+
+    if (!document.getElementById("michael-styles")) document.head.insertAdjacentHTML("beforeend", stylesCSS);
+    let grid = document.getElementById("michael-fov-grid");
+    if (!grid) {
+        grid = document.createElement("div");
+        grid.id = "michael-fov-grid";
+        document.body.appendChild(grid);
+    }
+
+    const size = Math.min(window.innerHeight, window.innerHeight * Math.tan(angle) * 2);
+    grid.style.width = `${size}px`;
+    grid.style.height = `${size}px`;
+    grid.style.opacity = "1";
+
+    if (fovTimeout) clearTimeout(fovTimeout);
+    fovTimeout = setTimeout(() => {
+        grid.style.opacity = "0";
+    }, 2000);
+  };
+
+  // Game Hooks
+  const G = {
+    wp: null, _n: null, bp: null,
+    get n() { if (!this._n && this.bp) this._n = v(this.bp).find(p => p?.entities); return this._n; },
+    init() {
+      if (this.wp) return;
+      const d = Object.getOwnPropertyDescriptors(window);
+      let k = Object.keys(d).find(k => d[k]?.set?.toString().includes("++"));
+      if (!k) k = Object.keys(window).find(k => Array.isArray(window[k]) && typeof window[k].push === "function");
+      if (!k) return;
+      const c = window[k];
+      c.push([[Math.floor(Math.random() * 9999999) + 1], {}, (r) => (this.wp = r)]);
+      this.bp = v(this.fm("nonBlocksClient:")).find(o => typeof o === "object");
+      this._n = null;
+    },
+    fm(s) { if (!this.wp) return null; for (const id in this.wp.m) if (this.wp.m[id]?.toString().includes(s)) return this.wp(id); }
+  };
+
+  const g = {
+    p: (id) => a(() => G.n.entities.getState(id, "position").position),
+    pl: () => a(() => { const ids = G.n?.bloxd?.getPlayerIds?.(); return ids ? Object.values(ids).map(Number).filter(id => id !== 1) : []; }, []),
+    c: () => a(() => G.n.camera, null)
+  };
+
+  class Mdl {
+    constructor(n, k) { this.n = n; this.k = k; this.on = 0; }
+    en() { if (!this.on) { this.on = 1; this.e(); ntf(this.n, true); } }
+    dis() { if (this.on) { this.on = 0; this.d(); ntf(this.n, false); } }
+    t() { this.on ? this.dis() : this.en(); }
+    e() {}
+    d() {}
+    u() {}
+  }
+
+  class AB extends Mdl {
+    constructor() {
+        super("Aimbot (Hold RMB)", "aimbot");
+        this.i = null;
+        this.l = 0;
+        this.holdingRMB = false;
+        this.onDown = (e) => { if(e.button === 2) this.holdingRMB = true; };
+        this.onUp = (e) => { if(e.button === 2) this.holdingRMB = false; };
+    }
+    e() {
+      if (this.i) return;
+      window.addEventListener("mousedown", this.onDown);
+      window.addEventListener("mouseup", this.onUp);
+      this.i = setInterval(() => {
+        if (!this.on || !this.holdingRMB) return;
+        const n = Date.now();
+        if (n - this.l < cfg.aimbot.i) return;
+        this.l = n;
+        try {
+          const p = g.p(1), c = g.c();
+          if (!p || !c) return;
+          let b = { id: null, d: Infinity, h: 0, p: 0 };
+
+          g.pl().forEach(id => {
+            const ep = g.p(id);
+            if (!ep) return;
+            const l = a(() => G.n.entities.getState(id, "genericLifeformState"), null);
+            if (l && l.isAlive === 0) return;
+
+            const dx = ep[0] - p[0], dy = ep[1] - p[1], dz = ep[2] - p[2];
+            const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+
+            if (!isFinite(dist) || dist < 0.1 || dist > cfg.aimbot.m) return;
+
+            const targetH = Math.atan2(dx, dz);
+            const targetP = -Math.asin(dy / dist);
+
+            // --- LOGIC FOV MỚI: Chỉ kiểm tra nếu fov_on = 1 ---
+            if (cfg.aimbot.fov_on) {
+                let dh = targetH - c.heading;
+                while (dh > Math.PI) dh -= 2 * Math.PI;
+                while (dh < -Math.PI) dh += 2 * Math.PI;
+                let dp = targetP - c.pitch;
+                const angleDiff = Math.sqrt(dh*dh + dp*dp);
+
+                // Nếu mục tiêu nằm ngoài lưới -> Bỏ qua
+                if (angleDiff > cfg.aimbot.fov) return;
+            }
+
+            if (dist < b.d) b = { id, d: dist, h: targetH, p: targetP };
+          });
+
+          if (!b.id) return;
+
+          const sm = cfg.aimbot.s || 0.4;
+          let dh = b.h - c.heading;
+          while (dh > Math.PI) dh -= 2 * Math.PI;
+          while (dh < -Math.PI) dh += 2 * Math.PI;
+          c.heading += dh * sm;
+          c.pitch += (b.p - c.pitch) * sm;
+        } catch {}
+      }, Math.max(5, cfg.aimbot.i));
+    }
+    d() {
+      window.removeEventListener("mousedown", this.onDown);
+      window.removeEventListener("mouseup", this.onUp);
+      this.holdingRMB = false;
+      if (this.i) { clearInterval(this.i); this.i = null; }
+    }
+  }
+
+  class ESP extends Mdl {
+    constructor() { super("ESP", "esp"); this.i = null; }
+    e() {
+      this.up(1);
+      if (this.i) return;
+      this.i = setInterval(() => { if (this.on) this.up(1); }, 500);
+    }
+    d() { if (this.i) { clearInterval(this.i); this.i = null; } this.up(0); }
+    up(s) {
+      if (!G.n) return;
+      const r = v(G.n)[12];
+      if (!r) return;
+      const tm = v(r).find(v => v?.thinMeshes)?.thinMeshes;
+      if (Array.isArray(tm)) tm.forEach(i => { const m = i?.meshVariations?.__DEFAULT__?.mesh; if (m && typeof m.renderingGroupId === "number") m.renderingGroupId = s ? 2 : 0; });
+    }
+  }
+
+  const mods = [new AB(), new ESP()];
+  let loop = null;
+
+  const sl = () => { try { localStorage.setItem(S, JSON.stringify(cfg)); } catch {} };
+  const ll = () => { try { const s = localStorage.getItem(S); if (s) Object.assign(cfg, JSON.parse(s)); const p = localStorage.getItem(M); if (p) { const pp = JSON.parse(p); if (pp.x !== null) pos.x = pp.x; if (pp.y !== null) pos.y = pp.y; } } catch {} };
+  const sp = () => { try { localStorage.setItem(M, JSON.stringify(pos)); } catch {} };
+
+  const Theme = {
+    bg: "rgba(255, 255, 255, 0.98)",
+    text: "#1e293b",
+    border: "#3b82f6",
+    headerBg: "rgba(59, 130, 246, 0.15)",
+    headerText: "#1d4ed8",
+    itemBg: "rgba(241, 245, 249, 0.8)",
+    inputBg: "#ffffff",
+    inputBorder: "#cbd5e1",
+    sliderBg: "#e2e8f0",
+    sliderFill: "#3b82f6",
+    shadow: "0 10px 40px rgba(0,0,0,0.15)"
+  };
+
+  const sliderCSS = `
+    <style id="michael-slider-style">
+      .michael-slider {
+        -webkit-appearance: none; width: 100%; height: 6px; border-radius: 3px; background: ${Theme.sliderBg}; outline: none; cursor: pointer; margin-top: 5px;
+      }
+      .michael-slider::-webkit-slider-thumb {
+        -webkit-appearance: none; width: 18px; height: 18px; border-radius: 50%; background: ${Theme.sliderFill};
+        cursor: pointer; border: 2px solid white; box-shadow: 0 1px 4px rgba(0,0,0,0.2); transition: transform 0.1s;
+      }
+      .michael-slider::-webkit-slider-thumb:hover { transform: scale(1.1); }
+    </style>
+  `;
+
+  const mk = () => {
+    if (!document.body) { setTimeout(mk, 100); return null; }
+    const ex = document.getElementById("slop-menu");
+    if (ex) ex.remove();
+
+    if (!document.getElementById("michael-slider-style")) {
+      document.head.insertAdjacentHTML("beforeend", sliderCSS);
+    }
+
+    const m = document.createElement("div");
+    m.id = "slop-menu";
+    const ix = pos.x !== null ? pos.x : (window.innerWidth / 2 - 220);
+    const iy = pos.y !== null ? pos.y : (window.innerHeight / 2 - 200);
+
+    m.style.cssText = `
+        position:fixed; top:${iy}px; left:${ix}px; width:440px;
+        background:${Theme.bg}; border:2px solid ${Theme.border}; border-radius:16px;
+        padding:0; z-index:9999999; font-family:'Segoe UI',sans-serif; color:${Theme.text};
+        display:block; box-shadow:${Theme.shadow}; backdrop-filter:blur(10px); user-select:none;
+    `;
+
+    const h = document.createElement("div");
+    h.style.cssText = `padding:15px; cursor:move; border-bottom:1px solid ${Theme.inputBorder}; background:${Theme.headerBg}; border-radius:14px 14px 0 0; text-align:center;`;
+    const t = document.createElement("div");
+    t.textContent = "MICHAEL | GIA AN v1.5";
+    t.style.cssText = `font-size:20px; font-weight:800; color:${Theme.headerText}; pointer-events:none;`;
+    h.appendChild(t);
+    m.appendChild(h);
+
+    const c = document.createElement("div");
+    c.style.cssText = `padding:20px; max-height:75vh; overflow-y:auto;`;
+
+    mods.forEach(md => {
+      const r = document.createElement("div");
+      r.style.cssText = `padding:14px; margin:8px 0; background:${Theme.itemBg}; border-radius:12px; border: 1px solid transparent; transition: all 0.2s;`;
+      r.onmouseenter = () => r.style.borderColor = Theme.border;
+      r.onmouseleave = () => r.style.borderColor = "transparent";
+
+      const hr = document.createElement("div");
+      hr.style.cssText = `display:flex; align-items:center; justify-content:space-between;`;
+
+      const ls = document.createElement("div");
+      ls.style.cssText = `display:flex; align-items:center; gap:12px;`;
+
+      const lb = document.createElement("span");
+      lb.textContent = md.n;
+      lb.style.cssText = `font-weight:700; font-size:14px;`;
+
+      const tg = document.createElement("button");
+      tg.textContent = md.on ? "BẬT" : "TẮT";
+      tg.style.cssText = `padding:6px 16px; border:none; border-radius:6px; background:${md.on ? "#10b981" : "#ef4444"}; color:white; cursor:pointer; font-weight:700; font-size:12px; transition: all 0.15s;`;
+      tg.onclick = () => {
+        md.t();
+        cfg[md.k].on = md.on ? 1 : 0;
+        tg.textContent = md.on ? "BẬT" : "TẮT";
+        tg.style.background = md.on ? "#10b981" : "#ef4444";
+        sl();
+      };
+      md._btn = tg;
+
+      const kb = document.createElement("input");
+      kb.type = "text";
+      kb.value = cfg[md.k]?.k || "None";
+      kb.style.cssText = `width:60px; padding:4px; background:${Theme.inputBg}; border:1px solid ${Theme.inputBorder}; border-radius:4px; color:${Theme.text}; text-align:center; font-size:11px;`;
+      kb.onclick = () => { kb.value = "..."; const h = (e) => { cfg[md.k].k = e.code; kb.value = e.code; sl(); document.removeEventListener("keydown", h); }; document.addEventListener("keydown", h, { once: 1 }); };
+
+      ls.appendChild(lb);
+      ls.appendChild(tg);
+      ls.appendChild(kb);
+      hr.appendChild(ls);
+      r.appendChild(hr);
+
+      // --- PHẦN SLIDER ---
+      if (md.k === "aimbot") {
+        const settingsBox = document.createElement("div");
+        settingsBox.style.cssText = "margin-top:15px; padding-top:10px; border-top:1px dashed #ccc;";
+
+        // 1. Smoothing
+        const smoothLabel = document.createElement("div");
+        smoothLabel.style.cssText = "display:flex; justify-content:space-between; font-size:12px; font-weight:600; margin-bottom:2px;";
+        smoothLabel.innerHTML = `<span>⚡ Độ mượt (Smooth)</span><span id="smooth-val" style="color:${Theme.sliderFill}">${cfg.aimbot.s.toFixed(2)}</span>`;
+        const smoothSlider = document.createElement("input");
+        smoothSlider.type = "range"; smoothSlider.min = "0.1"; smoothSlider.max = "0.7"; smoothSlider.step = "0.01"; smoothSlider.value = cfg.aimbot.s; smoothSlider.className = "michael-slider";
+        smoothSlider.oninput = (e) => {
+          const val = parseFloat(e.target.value); cfg.aimbot.s = val; document.getElementById("smooth-val").textContent = val.toFixed(2); sl();
+        };
+
+        // 2. Max Angle (FOV) Toggle & Slider
+        const fovLabel = document.createElement("div");
+        fovLabel.style.cssText = "display:flex; justify-content:space-between; align-items:center; font-size:12px; font-weight:600; margin-top:10px; margin-bottom:2px;";
+
+        // Tạo Checkbox Toggle
+        fovLabel.innerHTML = `
+            <div style="display:flex;align-items:center;gap:6px;">
+                <span>👁️ Góc Aim</span>
+                <input type="checkbox" id="fov-toggle" class="michael-checkbox" ${cfg.aimbot.fov_on ? "checked" : ""}>
+            </div>
+            <span id="fov-val" style="color:${Theme.sliderFill}">${cfg.aimbot.fov} rad</span>
+        `;
+
+        const fovSlider = document.createElement("input");
+        fovSlider.type = "range"; fovSlider.min = "0.1"; fovSlider.max = "0.8"; fovSlider.step = "0.1"; fovSlider.value = cfg.aimbot.fov; fovSlider.className = "michael-slider";
+        fovSlider.oninput = (e) => {
+          const val = parseFloat(e.target.value);
+          cfg.aimbot.fov = val;
+          document.getElementById("fov-val").textContent = val + " rad";
+          sl();
+          showFov(val); // Hiện lưới khi kéo
+        };
+
+        // 3. Distance
+        const distLabel = document.createElement("div");
+        distLabel.style.cssText = "display:flex; justify-content:space-between; font-size:12px; font-weight:600; margin-top:10px; margin-bottom:2px;";
+        distLabel.innerHTML = `<span>📏 Tầm xa (Distance)</span><span id="dist-val" style="color:${Theme.sliderFill}">${cfg.aimbot.m}m</span>`;
+        const distSlider = document.createElement("input");
+        distSlider.type = "range"; distSlider.min = "10"; distSlider.max = "500"; distSlider.step = "5"; distSlider.value = cfg.aimbot.m; distSlider.className = "michael-slider";
+        distSlider.oninput = (e) => {
+          const val = parseInt(e.target.value); cfg.aimbot.m = val; document.getElementById("dist-val").textContent = val + "m"; sl();
+        };
+
+        const note = document.createElement("div");
+        note.style.cssText = "font-size:11px; color:#64748b; margin-top:8px; font-style:italic;";
+        note.textContent = "ℹ️ Giữ Chuột Phải để Aim | Tích ô vuông để bật giới hạn góc";
+
+        settingsBox.appendChild(smoothLabel); settingsBox.appendChild(smoothSlider);
+        settingsBox.appendChild(fovLabel); settingsBox.appendChild(fovSlider);
+        settingsBox.appendChild(distLabel); settingsBox.appendChild(distSlider);
+        settingsBox.appendChild(note);
+        r.appendChild(settingsBox);
+
+        // Add event listener cho checkbox sau khi append
+        setTimeout(() => {
+            const fovCheck = document.getElementById("fov-toggle");
+            if (fovCheck) {
+                fovCheck.onchange = (e) => {
+                    cfg.aimbot.fov_on = e.target.checked ? 1 : 0;
+                    sl();
+                    if (cfg.aimbot.fov_on) showFov(cfg.aimbot.fov); // Hiện lưới báo hiệu
+                };
+            }
+        }, 50);
+      }
+
+      c.appendChild(r);
+    });
+
+    const cb = document.createElement("button");
+    cb.textContent = "Đóng Menu (.)";
+    cb.style.cssText = `width:100%; padding:12px; margin-top:10px; background:${Theme.headerBg}; border:1px solid ${Theme.border}; border-radius:8px; color:${Theme.headerText}; cursor:pointer; font-weight:700; font-size:13px;`;
+    cb.onmouseenter = () => { cb.style.background = Theme.border; cb.style.color = "white"; };
+    cb.onmouseleave = () => { cb.style.background = Theme.headerBg; cb.style.color = Theme.headerText; };
+    cb.onclick = () => tm();
+    c.appendChild(cb);
+    m.appendChild(c);
+
+    document.body.appendChild(m);
+
+    let dg = 0, ox = 0, oy = 0;
+    const sd = (e) => { if (["INPUT", "BUTTON", "RANGE"].includes(e.target.tagName)) return; dg = 1; const r = m.getBoundingClientRect(); ox = (e.touches?.[0]?.clientX ?? e.clientX) - r.left; oy = (e.touches?.[0]?.clientY ?? e.clientY) - r.top; document.addEventListener("mousemove", md); document.addEventListener("mouseup", ed); e.preventDefault(); };
+    const md = (e) => { if (!dg) return; const x = Math.max(0, Math.min((e.touches?.[0]?.clientX ?? e.clientX) - ox, window.innerWidth - m.offsetWidth)); const y = Math.max(0, Math.min((e.touches?.[0]?.clientY ?? e.clientY) - oy, window.innerHeight - m.offsetHeight)); m.style.left = `${x}px`; m.style.top = `${y}px`; pos.x = x; pos.y = y; sp(); };
+    const ed = () => { dg = 0; document.removeEventListener("mousemove", md); document.removeEventListener("mouseup", ed); };
+    h.addEventListener("mousedown", sd);
+    h.addEventListener("touchstart", sd, { passive: 0 });
+    return m;
+  };
+
+  const ub = () => {
+    if (!menu) return;
+    mods.forEach(md => {
+      if (md._btn) {
+        md._btn.textContent = md.on ? "BẬT" : "TẮT";
+        md._btn.style.background = md.on ? "#10b981" : "#ef4444";
+      }
+    });
+  };
+
+  const tm = () => {
+    if (!menu) menu = mk();
+    if (!menu) return;
+    const vis = menu.style.display !== "none";
+    menu.style.display = vis ? "none" : "block";
+    if (!vis) ub();
+  };
+
+  const sm = () => { if (!menu) menu = mk(); if (menu) { menu.style.display = "block"; ub(); } };
+
+  const hk = (e) => {
+    if (e.code === "Period" || e.key === "." || e.key === "。") { e.preventDefault(); tm(); return; }
+    if (e.target.tagName === "INPUT") { if (e.code === "Insert") { e.preventDefault(); tm(); } return; }
+    if (e.code === "Insert") { e.preventDefault(); tm(); return; }
+    mods.forEach(md => { if (cfg[md.k]?.k === e.code) { md.t(); cfg[md.k].on = md.on ? 1 : 0; sl(); ub(); } });
+  };
+
+  const hrs = (e) => {
+    if (e.code === "ShiftRight" || (e.key === "Shift" && e.location === 2)) {
+      if (e.type === "keydown" && !rshift) { rshift = 1; e.preventDefault(); tm(); } else if (e.type === "keyup") rshift = 0;
+    }
+  };
+
+  const stb = () => {
+    if (btn) return;
+    if (!document.body) { setTimeout(stb, 100); return; }
+    btn = document.createElement("button");
+    btn.textContent = "M";
+    btn.id = "slop-btn";
+    btn.style.cssText = `position:fixed; top:12px; right:12px; width:44px; height:44px; border:3px solid ${Theme.border}; border-radius:50%; background:white; color:${Theme.border}; cursor:pointer; font-size:20px; font-weight:800; z-index:9999999; display:flex; align-items:center; justify-content:center; box-shadow:0 4px 15px rgba(0,0,0,0.15); transition:all 0.2s ease;`;
+    btn.onclick = () => tm();
+    document.body.appendChild(btn);
+  };
+
+  const cli = () => {
+    if (lobby) return;
+    if (!document.body) { setTimeout(cli, 100); return; }
+    lobby = document.createElement("div");
+    lobby.textContent = "Chờ vào game... (Ấn . để mở menu)";
+    lobby.style.cssText = `position:fixed; top:0; left:0; padding:10px 16px; background:white; border:2px solid ${Theme.border}; border-top:none; border-left:none; border-radius:0 0 12px 0; color:${Theme.text}; font-size:13px; font-weight:600; z-index:9999999; pointer-events:none;`;
+    document.body.appendChild(lobby);
+  };
+
+  const ul = () => {
+    if (!lobby) return;
+    try {
+      let il = 0;
+      if (G.n) { try { const p = g.p(1); il = p && Array.isArray(p) && p.length === 3 && isFinite(p[0]); } catch {} }
+      if (il) { if (!inLobby) inLobby = 1; lobby.style.display = "none"; }
+      else { if (inLobby) inLobby = 0; lobby.style.display = "block"; }
+    } catch { inLobby = 0; lobby.style.display = "block"; }
+  };
+
+  const init = () => {
+    try {
+      G.init();
+      if (!G.n) { setTimeout(init, 500); return; }
+      ll();
+      if (!loop) loop = setInterval(() => { mods.forEach(m => { if (m.on && m.u) m.u(); }); }, 16);
+      if (!window._michael) {
+        document.addEventListener("keydown", hk);
+        document.addEventListener("keydown", hrs);
+        document.addEventListener("keyup", hrs);
+        window._michael = 1;
+      }
+      stb(); cli(); setInterval(() => ul(), 500);
+      console.log("%c[MICHAEL v1.5] Ready!", "color:#3b82f6;font-weight:bold;");
+      setTimeout(() => { if (!menu || menu.style.display === "none") sm(); }, 1500);
+    } catch (e) { setTimeout(init, 1000); }
+  };
+
+  window.MichaelGiaAn = { cfg, mods, tm, sm, init };
+  const startInit = () => { if (document.body) init(); else { const checkBody = setInterval(() => { if (document.body) { clearInterval(checkBody); init(); } }, 100); setTimeout(() => clearInterval(checkBody), 10000); } };
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', startInit); else startInit();
+})();
