@@ -1,0 +1,320 @@
+// ==UserScript==
+// @name         CubeRealm Angel v8: Keybinds & Zoom Toggle
+// @namespace    http://tampermonkey.net/
+// @version      8.0
+// @description  Menu Angel, Chỉnh phím tắt (Keybind), Zoom On/Off, X-Ray, ESP
+// @author       Rash_Vison
+// @match        *://cuberealm.io/*
+// @grant        none
+// @run-at       document-start
+// ==/UserScript==
+
+(function() {
+    'use strict';
+
+    // --- QUẢN LÝ CẤU HÌNH & LƯU TRỮ ---
+    const DEFAULT_CONFIG = {
+        menuKey: 'Period', // Phím dấu chấm (.)
+        features: {
+            wireframe: false,
+            esp: false,
+            zoom: false // Mặc định tắt zoom
+        },
+        zoomValue: 70,
+        // Lưu mã phím (e.code)
+        binds: {
+            wireframe: 'KeyX', // Mặc định phím X
+            esp: 'KeyV',       // Mặc định phím V
+            zoom: 'KeyZ'       // Mặc định phím Z
+        }
+    };
+
+    // Tải cài đặt từ LocalStorage
+    let CONFIG = JSON.parse(localStorage.getItem('cr_angel_v8')) || DEFAULT_CONFIG;
+
+    function saveConfig() {
+        localStorage.setItem('cr_angel_v8', JSON.stringify(CONFIG));
+    }
+
+    // Biến trạng thái đang đợi nhập phím
+    let bindingAction = null;
+
+    // ----------------------------------------------------------------
+    // 1. WEBGL HACK (ĐỒ HỌA)
+    // ----------------------------------------------------------------
+    function injectWebGL() {
+        const hook = (glProto) => {
+            const _drawElements = glProto.drawElements;
+            const _drawInstanced = glProto.drawElementsInstanced;
+            const _uniformMatrix4fv = glProto.uniformMatrix4fv;
+
+            // >> A. HACK ZOOM (Chỉ chạy khi bật Toggle Zoom)
+            glProto.uniformMatrix4fv = function(location, transpose, value) {
+                // Chỉ can thiệp nếu tính năng Zoom đang BẬT
+                if (CONFIG.features.zoom && value.length === 16 && value[15] === 0 && value[11] === -1) {
+                    const currentFOV = parseInt(CONFIG.zoomValue);
+                    const baseFOV = 70;
+
+                    if (currentFOV !== baseFOV) {
+                        const factor = Math.tan(baseFOV * 0.5 * Math.PI / 180) / Math.tan(currentFOV * 0.5 * Math.PI / 180);
+                        const newValue = new Float32Array(value);
+                        newValue[0] *= factor;
+                        newValue[5] *= factor;
+                        return _uniformMatrix4fv.call(this, location, transpose, newValue);
+                    }
+                }
+                return _uniformMatrix4fv.apply(this, arguments);
+            };
+
+            // >> B. HACK VISUALS
+            const handleDraw = (ctx, args, isInstanced) => {
+                if (CONFIG.features.wireframe) args[0] = 1; // LINES
+
+                if (CONFIG.features.esp) {
+                    ctx.disable(ctx.DEPTH_TEST);
+                } else {
+                    ctx.enable(ctx.DEPTH_TEST);
+                }
+
+                if (isInstanced) return _drawInstanced.apply(ctx, args);
+                return _drawElements.apply(ctx, args);
+            };
+
+            glProto.drawElements = function() { return handleDraw(this, arguments, false); };
+            if (_drawInstanced) {
+                glProto.drawElementsInstanced = function() { return handleDraw(this, arguments, true); };
+            }
+        };
+
+        if (window.WebGLRenderingContext) hook(window.WebGLRenderingContext.prototype);
+        if (window.WebGL2RenderingContext) hook(window.WebGL2RenderingContext.prototype);
+    }
+
+    injectWebGL();
+
+    // ----------------------------------------------------------------
+    // 2. GIAO DIỆN (ANGEL UI)
+    // ----------------------------------------------------------------
+    function initUI() {
+        // Helper để lấy tên phím ngắn gọn
+        const getKeyName = (code) => code.replace('Key', '').replace('Digit', '');
+
+        const css = `
+            @import url('https://fonts.googleapis.com/css2?family=Quicksand:wght@500;700&display=swap');
+
+            #angel-menu {
+                position: fixed; top: 50px; left: 50px; width: 300px;
+                background: rgba(255, 255, 255, 0.95);
+                backdrop-filter: blur(10px);
+                border-radius: 20px;
+                box-shadow: 0 15px 50px rgba(0,0,0,0.15);
+                font-family: 'Quicksand', sans-serif;
+                z-index: 999999;
+                padding: 20px;
+                transition: opacity 0.3s, transform 0.3s;
+                user-select: none;
+            }
+
+            #angel-menu.hidden {
+                opacity: 0; pointer-events: none;
+                transform: translateY(20px) scale(0.95);
+            }
+
+            .am-header {
+                font-size: 18px; font-weight: 700; color: #333;
+                margin-bottom: 15px; display: flex; justify-content: space-between; align-items: center;
+            }
+
+            .am-row {
+                display: flex; align-items: center; justify-content: space-between;
+                margin-bottom: 12px;
+                padding-bottom: 12px;
+                border-bottom: 1px solid #f0f0f0;
+            }
+            .am-row:last-child { border-bottom: none; }
+
+            .am-left { display: flex; align-items: center; gap: 8px; }
+            .am-label { font-size: 14px; font-weight: 600; color: #555; }
+
+            /* Nút Bind Key */
+            .key-bind-btn {
+                background: #edf2f7; border: 1px solid #cbd5e0;
+                border-radius: 6px; padding: 2px 8px;
+                font-size: 11px; font-weight: 700; color: #718096;
+                cursor: pointer; min-width: 30px; text-align: center;
+                transition: 0.2s;
+                box-shadow: 0 2px 0 #cbd5e0;
+            }
+            .key-bind-btn:hover { background: #e2e8f0; }
+            .key-bind-btn:active { transform: translateY(2px); box-shadow: none; }
+            .key-bind-btn.recording {
+                background: #fca5a5; color: #991b1b; border-color: #f87171;
+                box-shadow: 0 2px 0 #f87171; animation: pulse 1s infinite;
+            }
+
+            @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.7; } 100% { opacity: 1; } }
+
+            /* Switch iOS */
+            .ios-switch { position: relative; width: 40px; height: 22px; }
+            .ios-switch input { opacity: 0; width: 0; height: 0; }
+            .slider {
+                position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0;
+                background-color: #e2e8f0; transition: .3s; border-radius: 34px;
+            }
+            .slider:before {
+                position: absolute; content: ""; height: 16px; width: 16px;
+                left: 3px; bottom: 3px; background-color: white;
+                transition: .3s; border-radius: 50%;
+                box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            }
+            input:checked + .slider { background-color: #8b5cf6; }
+            input:checked + .slider:before { transform: translateX(18px); }
+
+            /* Slider Range */
+            .range-wrap { width: 100%; margin-top: 5px; }
+            input[type=range] {
+                width: 100%; -webkit-appearance: none; background: transparent;
+            }
+            input[type=range]::-webkit-slider-thumb {
+                -webkit-appearance: none; height: 16px; width: 16px;
+                border-radius: 50%; background: #8b5cf6; cursor: pointer;
+                margin-top: -6px;
+            }
+            input[type=range]::-webkit-slider-runnable-track {
+                width: 100%; height: 4px; background: #e2e8f0; border-radius: 2px;
+            }
+
+            .am-footer { text-align: center; font-size: 11px; color: #aaa; margin-top: 10px; }
+        `;
+        const style = document.createElement('style');
+        style.innerHTML = css;
+        document.head.appendChild(style);
+
+        const menu = document.createElement('div');
+        menu.id = 'angel-menu';
+
+        // Render UI
+        const renderRow = (id, label, bindKey) => `
+            <div class="am-row">
+                <div class="am-left">
+                    <button class="key-bind-btn" id="bind-${id}">${getKeyName(CONFIG.binds[bindKey])}</button>
+                    <span class="am-label">${label}</span>
+                </div>
+                <label class="ios-switch">
+                    <input type="checkbox" id="chk-${id}" ${CONFIG.features[id] ? 'checked' : ''}>
+                    <span class="slider"></span>
+                </label>
+            </div>
+        `;
+
+        menu.innerHTML = `
+            <div class="am-header">
+                <span>MICHAEL | VÕ GIA AN v1.0</span>
+            </div>
+
+            ${renderRow('wireframe', 'X-Ray Wireframe', 'wireframe')}
+            ${renderRow('esp', 'ESP (Xuyên thấu)', 'esp')}
+            ${renderRow('zoom', 'Bật Zoom Mod', 'zoom')}
+
+            <div class="range-wrap">
+                <div style="display:flex; justify-content:space-between; font-size:12px; color:#888; margin-bottom:4px;">
+                    <span>Zoom Level</span>
+                    <span id="zoom-text">${CONFIG.zoomValue}</span>
+                </div>
+                <input type="range" id="zoom-range" min="1" max="185" value="${CONFIG.zoomValue}">
+            </div>
+
+            <div class="am-footer">Nhấn [ . ] để ẩn hiện Menu</div>
+        `;
+        document.body.appendChild(menu);
+
+        // --- XỬ LÝ LOGIC UI ---
+
+        // 1. Logic các Toggle Switch
+        const setupToggle = (id) => {
+            const chk = document.getElementById(`chk-${id}`);
+            chk.onchange = (e) => {
+                CONFIG.features[id] = e.target.checked;
+                saveConfig();
+            };
+        };
+        ['wireframe', 'esp', 'zoom'].forEach(setupToggle);
+
+        // 2. Logic Zoom Slider
+        const range = document.getElementById('zoom-range');
+        const rangeText = document.getElementById('zoom-text');
+        range.oninput = (e) => {
+            CONFIG.zoomValue = e.target.value;
+            rangeText.textContent = e.target.value;
+            saveConfig();
+        };
+
+        // 3. Logic Gán Phím (Binding)
+        const setupBind = (id, keyName) => {
+            const btn = document.getElementById(`bind-${id}`);
+            btn.onclick = () => {
+                if (bindingAction) return; // Đang bind cái khác thì thôi
+                bindingAction = keyName;
+                btn.textContent = '...';
+                btn.classList.add('recording');
+            };
+        };
+        setupBind('wireframe', 'wireframe');
+        setupBind('esp', 'esp');
+        setupBind('zoom', 'zoom');
+    }
+
+    // --- XỬ LÝ SỰ KIỆN PHÍM (GLOBAL) ---
+    function handleInput(e) {
+        // Không xử lý khi đang chat
+        if (['input', 'textarea'].includes(document.activeElement.tagName.toLowerCase())) return;
+
+        // A. Nếu đang trong chế độ Gán Phím
+        if (bindingAction) {
+            e.preventDefault(); // Chặn hành động game
+            e.stopPropagation();
+
+            // Lưu phím mới
+            CONFIG.binds[bindingAction] = e.code;
+            saveConfig();
+
+            // Cập nhật giao diện nút
+            const btn = document.getElementById(`bind-${bindingAction}`);
+            if (btn) {
+                btn.textContent = e.code.replace('Key', '').replace('Digit', '');
+                btn.classList.remove('recording');
+            }
+
+            bindingAction = null; // Thoát chế độ gán
+            return;
+        }
+
+        // B. Xử lý Toggle Menu
+        if (e.key === '.') {
+            const m = document.getElementById('angel-menu');
+            if (m) m.classList.toggle('hidden');
+        }
+
+        // C. Xử lý Phím tắt chức năng
+        const code = e.code;
+
+        // Hàm helper để toggle checkbox trên UI cho đồng bộ
+        const toggleFeature = (feat) => {
+            CONFIG.features[feat] = !CONFIG.features[feat];
+            const chk = document.getElementById(`chk-${feat}`);
+            if (chk) chk.checked = CONFIG.features[feat];
+            saveConfig();
+        };
+
+        if (code === CONFIG.binds.wireframe) toggleFeature('wireframe');
+        if (code === CONFIG.binds.esp) toggleFeature('esp');
+        if (code === CONFIG.binds.zoom) toggleFeature('zoom');
+    }
+
+    // --- MAIN ---
+    window.addEventListener('load', () => {
+        initUI();
+        document.addEventListener('keydown', handleInput, true); // Use capture phase
+    });
+
+})();
