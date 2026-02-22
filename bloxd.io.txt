@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         MICHAEL | GIA AN Client v1.1
+// @name         MICHAEL | GIA AN Client v1.5
 // @namespace    https://greasyfork.org/en/users/1299968-grad
-// @version      v1.1-RMB-Hold
-// @description  Bloxd.io Client - RMB Aim Only, Always Visible Sliders, Smooth 0.7
+// @version      v1.5-FOV-Toggle
+// @description  Bloxd.io Client - Added Toggle for Max Angle (FOV)
 // @author       MICHAEL | GIA AN
 // @license      MIT
 // @match        https://bloxd.io/*
@@ -17,15 +17,100 @@
 (function() {
   'use strict';
 
-  alert("MICHAEL | GIA AN v1.1\n- Giữ CHUỘT PHẢI để Aimbot hoạt động\n- Phím Menu: Dấu chấm (.)");
+  alert("MICHAEL | GIA AN v1.5\n- Đã thêm nút BẬT/TẮT cho Góc Aim (FOV)\n- Check vào ô vuông cạnh 'Góc Aim' để dùng giới hạn góc.");
 
-  const C = { aimbot: { on: 0, i: 20, s: 0.4, m: 100, k: null }, esp: { on: 0, k: null } };
-  const S = "michael_gia_an_cfg_v2", M = "michael_gia_an_pos";
+  // Config: Thêm fov_on (Trạng thái bật tắt FOV)
+  const C = { aimbot: { on: 0, i: 20, s: 0.4, m: 100, fov: 0.4, fov_on: 1, k: null }, esp: { on: 0, k: null } };
+  const S = "michael_gia_an_cfg_v5", M = "michael_gia_an_pos";
   let cfg = JSON.parse(JSON.stringify(C)), menu = null, pos = { x: null, y: null }, lobby = null, btn = null, inLobby = 0, rshift = 0;
+  let fovTimeout = null;
 
   const v = (o) => Object.values(o || {});
   const a = (f, d = null) => { try { return f(); } catch { return d; } };
 
+  // --- STYLES ---
+  const stylesCSS = `
+    <style id="michael-styles">
+      /* Notification */
+      .michael-notif-container { position: fixed; bottom: 20px; left: 20px; z-index: 10000001; pointer-events: none; }
+      .michael-notif {
+        background: rgba(255, 255, 255, 0.95); border-left: 6px solid #333; padding: 12px 24px;
+        border-radius: 4px; box-shadow: 0 4px 15px rgba(0,0,0,0.15); font-family: 'Segoe UI', sans-serif;
+        min-width: 200px; transform: translateX(-120%); transition: transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        backdrop-filter: blur(5px); display: flex; flex-direction: column;
+      }
+      .michael-notif.show { transform: translateX(0); }
+      .mn-title { font-weight: 800; font-size: 14px; color: #333; margin-bottom: 2px; }
+      .mn-status { font-weight: 600; font-size: 12px; text-transform: uppercase; }
+
+      /* FOV Grid */
+      #michael-fov-grid {
+        position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+        border: 2px solid rgba(59, 130, 246, 0.6);
+        background-image:
+          linear-gradient(rgba(59, 130, 246, 0.1) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(59, 130, 246, 0.1) 1px, transparent 1px);
+        background-size: 20px 20px;
+        border-radius: 50%;
+        pointer-events: none;
+        z-index: 9999;
+        opacity: 0;
+        transition: opacity 0.3s, width 0.2s, height 0.2s;
+        box-shadow: 0 0 50px rgba(59, 130, 246, 0.2) inset;
+      }
+      #michael-fov-grid::after {
+        content: ''; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+        width: 4px; height: 4px; background: rgba(59, 130, 246, 0.8); border-radius: 50%;
+      }
+
+      /* Checkbox Style */
+      .michael-checkbox {
+        width: 16px; height: 16px; cursor: pointer; accent-color: #3b82f6;
+      }
+    </style>
+  `;
+
+  const ntf = (name, state) => {
+    if (!document.getElementById("michael-styles")) document.head.insertAdjacentHTML("beforeend", stylesCSS);
+    let con = document.getElementById("michael-notif-area");
+    if (!con) {
+        con = document.createElement("div"); con.id = "michael-notif-area"; con.className = "michael-notif-container";
+        document.body.appendChild(con);
+    }
+    con.innerHTML = '';
+    const el = document.createElement("div");
+    el.className = "michael-notif";
+    el.style.borderLeftColor = state ? "#10b981" : "#ef4444";
+    el.innerHTML = `<span class="mn-title">${name}</span><span class="mn-status" style="color:${state ? "#059669" : "#dc2626"}">${state ? "ĐÃ BẬT" : "ĐÃ TẮT"}</span>`;
+    con.appendChild(el);
+    requestAnimationFrame(() => el.classList.add("show"));
+    setTimeout(() => { if (el && el.parentNode) { el.classList.remove("show"); setTimeout(() => { if (el && el.parentNode) el.remove(); }, 300); } }, 2000);
+  };
+
+  const showFov = (angle) => {
+    // Chỉ hiện lưới nếu tính năng FOV đang BẬT
+    if (!cfg.aimbot.fov_on) return;
+
+    if (!document.getElementById("michael-styles")) document.head.insertAdjacentHTML("beforeend", stylesCSS);
+    let grid = document.getElementById("michael-fov-grid");
+    if (!grid) {
+        grid = document.createElement("div");
+        grid.id = "michael-fov-grid";
+        document.body.appendChild(grid);
+    }
+
+    const size = Math.min(window.innerHeight, window.innerHeight * Math.tan(angle) * 2);
+    grid.style.width = `${size}px`;
+    grid.style.height = `${size}px`;
+    grid.style.opacity = "1";
+
+    if (fovTimeout) clearTimeout(fovTimeout);
+    fovTimeout = setTimeout(() => {
+        grid.style.opacity = "0";
+    }, 2000);
+  };
+
+  // Game Hooks
   const G = {
     wp: null, _n: null, bp: null,
     get n() { if (!this._n && this.bp) this._n = v(this.bp).find(p => p?.entities); return this._n; },
@@ -51,8 +136,8 @@
 
   class Mdl {
     constructor(n, k) { this.n = n; this.k = k; this.on = 0; }
-    en() { if (!this.on) { this.on = 1; this.e(); } }
-    dis() { if (this.on) { this.on = 0; this.d(); } }
+    en() { if (!this.on) { this.on = 1; this.e(); ntf(this.n, true); } }
+    dis() { if (this.on) { this.on = 0; this.d(); ntf(this.n, false); } }
     t() { this.on ? this.dis() : this.en(); }
     e() {}
     d() {}
@@ -61,26 +146,19 @@
 
   class AB extends Mdl {
     constructor() {
-        super("Aimbot (Giữ Chuột Phải)", "aimbot");
+        super("Aimbot (Hold RMB)", "aimbot");
         this.i = null;
         this.l = 0;
-        this.holdingRMB = false; // Trạng thái giữ chuột phải
-
-        // Event handlers
+        this.holdingRMB = false;
         this.onDown = (e) => { if(e.button === 2) this.holdingRMB = true; };
         this.onUp = (e) => { if(e.button === 2) this.holdingRMB = false; };
     }
-
     e() {
       if (this.i) return;
-      // Lắng nghe sự kiện chuột
       window.addEventListener("mousedown", this.onDown);
       window.addEventListener("mouseup", this.onUp);
-
       this.i = setInterval(() => {
-        // Chỉ chạy aimbot nếu ĐANG BẬT và ĐANG GIỮ CHUỘT PHẢI
         if (!this.on || !this.holdingRMB) return;
-
         const n = Date.now();
         if (n - this.l < cfg.aimbot.i) return;
         this.l = n;
@@ -88,17 +166,38 @@
           const p = g.p(1), c = g.c();
           if (!p || !c) return;
           let b = { id: null, d: Infinity, h: 0, p: 0 };
+
           g.pl().forEach(id => {
             const ep = g.p(id);
             if (!ep) return;
             const l = a(() => G.n.entities.getState(id, "genericLifeformState"), null);
             if (l && l.isAlive === 0) return;
+
             const dx = ep[0] - p[0], dy = ep[1] - p[1], dz = ep[2] - p[2];
             const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+
             if (!isFinite(dist) || dist < 0.1 || dist > cfg.aimbot.m) return;
-            if (dist < b.d) b = { id, d: dist, h: Math.atan2(dx, dz), p: -Math.asin(dy / dist) };
+
+            const targetH = Math.atan2(dx, dz);
+            const targetP = -Math.asin(dy / dist);
+
+            // --- LOGIC FOV MỚI: Chỉ kiểm tra nếu fov_on = 1 ---
+            if (cfg.aimbot.fov_on) {
+                let dh = targetH - c.heading;
+                while (dh > Math.PI) dh -= 2 * Math.PI;
+                while (dh < -Math.PI) dh += 2 * Math.PI;
+                let dp = targetP - c.pitch;
+                const angleDiff = Math.sqrt(dh*dh + dp*dp);
+
+                // Nếu mục tiêu nằm ngoài lưới -> Bỏ qua
+                if (angleDiff > cfg.aimbot.fov) return;
+            }
+
+            if (dist < b.d) b = { id, d: dist, h: targetH, p: targetP };
           });
+
           if (!b.id) return;
+
           const sm = cfg.aimbot.s || 0.4;
           let dh = b.h - c.heading;
           while (dh > Math.PI) dh -= 2 * Math.PI;
@@ -108,13 +207,10 @@
         } catch {}
       }, Math.max(5, cfg.aimbot.i));
     }
-
     d() {
-      // Xóa lắng nghe sự kiện
       window.removeEventListener("mousedown", this.onDown);
       window.removeEventListener("mouseup", this.onUp);
       this.holdingRMB = false;
-
       if (this.i) { clearInterval(this.i); this.i = null; }
     }
   }
@@ -160,29 +256,13 @@
   const sliderCSS = `
     <style id="michael-slider-style">
       .michael-slider {
-        -webkit-appearance: none;
-        width: 100%;
-        height: 6px;
-        border-radius: 3px;
-        background: ${Theme.sliderBg};
-        outline: none;
-        cursor: pointer;
-        margin-top: 5px;
+        -webkit-appearance: none; width: 100%; height: 6px; border-radius: 3px; background: ${Theme.sliderBg}; outline: none; cursor: pointer; margin-top: 5px;
       }
       .michael-slider::-webkit-slider-thumb {
-        -webkit-appearance: none;
-        width: 18px;
-        height: 18px;
-        border-radius: 50%;
-        background: ${Theme.sliderFill};
-        cursor: pointer;
-        border: 2px solid white;
-        box-shadow: 0 1px 4px rgba(0,0,0,0.2);
-        transition: transform 0.1s;
+        -webkit-appearance: none; width: 18px; height: 18px; border-radius: 50%; background: ${Theme.sliderFill};
+        cursor: pointer; border: 2px solid white; box-shadow: 0 1px 4px rgba(0,0,0,0.2); transition: transform 0.1s;
       }
-      .michael-slider::-webkit-slider-thumb:hover {
-        transform: scale(1.1);
-      }
+      .michael-slider::-webkit-slider-thumb:hover { transform: scale(1.1); }
     </style>
   `;
 
@@ -210,7 +290,7 @@
     const h = document.createElement("div");
     h.style.cssText = `padding:15px; cursor:move; border-bottom:1px solid ${Theme.inputBorder}; background:${Theme.headerBg}; border-radius:14px 14px 0 0; text-align:center;`;
     const t = document.createElement("div");
-    t.textContent = "MICHAEL | GIA AN v1.1";
+    t.textContent = "MICHAEL | GIA AN v1.5";
     t.style.cssText = `font-size:20px; font-weight:800; color:${Theme.headerText}; pointer-events:none;`;
     h.appendChild(t);
     m.appendChild(h);
@@ -258,59 +338,75 @@
       hr.appendChild(ls);
       r.appendChild(hr);
 
-      // --- PHẦN SLIDER LUÔN HIỆN CHO AIMBOT ---
+      // --- PHẦN SLIDER ---
       if (md.k === "aimbot") {
         const settingsBox = document.createElement("div");
         settingsBox.style.cssText = "margin-top:15px; padding-top:10px; border-top:1px dashed #ccc;";
 
-        // 1. Smoothing Slider (0.1 - 0.7)
+        // 1. Smoothing
         const smoothLabel = document.createElement("div");
         smoothLabel.style.cssText = "display:flex; justify-content:space-between; font-size:12px; font-weight:600; margin-bottom:2px;";
         smoothLabel.innerHTML = `<span>⚡ Độ mượt (Smooth)</span><span id="smooth-val" style="color:${Theme.sliderFill}">${cfg.aimbot.s.toFixed(2)}</span>`;
-
         const smoothSlider = document.createElement("input");
-        smoothSlider.type = "range";
-        smoothSlider.min = "0.1";
-        smoothSlider.max = "0.7"; // Đã sửa thành 0.7
-        smoothSlider.step = "0.01";
-        smoothSlider.value = cfg.aimbot.s;
-        smoothSlider.className = "michael-slider";
+        smoothSlider.type = "range"; smoothSlider.min = "0.1"; smoothSlider.max = "0.7"; smoothSlider.step = "0.01"; smoothSlider.value = cfg.aimbot.s; smoothSlider.className = "michael-slider";
         smoothSlider.oninput = (e) => {
-          const val = parseFloat(e.target.value);
-          cfg.aimbot.s = val;
-          document.getElementById("smooth-val").textContent = val.toFixed(2);
-          sl();
+          const val = parseFloat(e.target.value); cfg.aimbot.s = val; document.getElementById("smooth-val").textContent = val.toFixed(2); sl();
         };
 
-        // 2. Distance Slider (10 - 500)
+        // 2. Max Angle (FOV) Toggle & Slider
+        const fovLabel = document.createElement("div");
+        fovLabel.style.cssText = "display:flex; justify-content:space-between; align-items:center; font-size:12px; font-weight:600; margin-top:10px; margin-bottom:2px;";
+
+        // Tạo Checkbox Toggle
+        fovLabel.innerHTML = `
+            <div style="display:flex;align-items:center;gap:6px;">
+                <span>👁️ Góc Aim</span>
+                <input type="checkbox" id="fov-toggle" class="michael-checkbox" ${cfg.aimbot.fov_on ? "checked" : ""}>
+            </div>
+            <span id="fov-val" style="color:${Theme.sliderFill}">${cfg.aimbot.fov} rad</span>
+        `;
+
+        const fovSlider = document.createElement("input");
+        fovSlider.type = "range"; fovSlider.min = "0.1"; fovSlider.max = "0.8"; fovSlider.step = "0.1"; fovSlider.value = cfg.aimbot.fov; fovSlider.className = "michael-slider";
+        fovSlider.oninput = (e) => {
+          const val = parseFloat(e.target.value);
+          cfg.aimbot.fov = val;
+          document.getElementById("fov-val").textContent = val + " rad";
+          sl();
+          showFov(val); // Hiện lưới khi kéo
+        };
+
+        // 3. Distance
         const distLabel = document.createElement("div");
         distLabel.style.cssText = "display:flex; justify-content:space-between; font-size:12px; font-weight:600; margin-top:10px; margin-bottom:2px;";
         distLabel.innerHTML = `<span>📏 Tầm xa (Distance)</span><span id="dist-val" style="color:${Theme.sliderFill}">${cfg.aimbot.m}m</span>`;
-
         const distSlider = document.createElement("input");
-        distSlider.type = "range";
-        distSlider.min = "10";
-        distSlider.max = "500";
-        distSlider.step = "5";
-        distSlider.value = cfg.aimbot.m;
-        distSlider.className = "michael-slider";
+        distSlider.type = "range"; distSlider.min = "10"; distSlider.max = "500"; distSlider.step = "5"; distSlider.value = cfg.aimbot.m; distSlider.className = "michael-slider";
         distSlider.oninput = (e) => {
-          const val = parseInt(e.target.value);
-          cfg.aimbot.m = val;
-          document.getElementById("dist-val").textContent = val + "m";
-          sl();
+          const val = parseInt(e.target.value); cfg.aimbot.m = val; document.getElementById("dist-val").textContent = val + "m"; sl();
         };
 
         const note = document.createElement("div");
         note.style.cssText = "font-size:11px; color:#64748b; margin-top:8px; font-style:italic;";
-        note.textContent = "ℹ️ Chỉ hoạt động khi giữ Chuột Phải";
+        note.textContent = "ℹ️ Giữ Chuột Phải để Aim | Tích ô vuông để bật giới hạn góc";
 
-        settingsBox.appendChild(smoothLabel);
-        settingsBox.appendChild(smoothSlider);
-        settingsBox.appendChild(distLabel);
-        settingsBox.appendChild(distSlider);
+        settingsBox.appendChild(smoothLabel); settingsBox.appendChild(smoothSlider);
+        settingsBox.appendChild(fovLabel); settingsBox.appendChild(fovSlider);
+        settingsBox.appendChild(distLabel); settingsBox.appendChild(distSlider);
         settingsBox.appendChild(note);
         r.appendChild(settingsBox);
+
+        // Add event listener cho checkbox sau khi append
+        setTimeout(() => {
+            const fovCheck = document.getElementById("fov-toggle");
+            if (fovCheck) {
+                fovCheck.onchange = (e) => {
+                    cfg.aimbot.fov_on = e.target.checked ? 1 : 0;
+                    sl();
+                    if (cfg.aimbot.fov_on) showFov(cfg.aimbot.fov); // Hiện lưới báo hiệu
+                };
+            }
+        }, 50);
       }
 
       c.appendChild(r);
@@ -404,7 +500,6 @@
       G.init();
       if (!G.n) { setTimeout(init, 500); return; }
       ll();
-      mods.forEach(md => { if (cfg[md.k]?.on === 1 && !md.on) md.en(); });
       if (!loop) loop = setInterval(() => { mods.forEach(m => { if (m.on && m.u) m.u(); }); }, 16);
       if (!window._michael) {
         document.addEventListener("keydown", hk);
@@ -413,7 +508,7 @@
         window._michael = 1;
       }
       stb(); cli(); setInterval(() => ul(), 500);
-      console.log("%c[MICHAEL v1.1] Ready!", "color:#3b82f6;font-weight:bold;");
+      console.log("%c[MICHAEL v1.5] Ready!", "color:#3b82f6;font-weight:bold;");
       setTimeout(() => { if (!menu || menu.style.display === "none") sm(); }, 1500);
     } catch (e) { setTimeout(init, 1000); }
   };
